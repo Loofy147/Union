@@ -1,0 +1,38 @@
+global:
+  scrape_interval: 15s # By default, scrape targets every 15 seconds.
+
+scrape_configs:
+  # Scrape config for Prometheus itself.
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Scrape config for the Unified AI API running in Kubernetes
+  - job_name: 'unified-ai-api'
+    # For Kubernetes service discovery
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      # Find pods with the label 'app: unified-ai-api'
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: unified-ai-api
+      # Scrape on port 8000, where the app is running
+      - source_labels: [__address__]
+        action: replace
+        target_label: __address__
+        regex: '([^:]+):\\d+'
+        replacement: '${1}:8000'
+      # Add a job label for clarity in Prometheus
+      - target_label: 'job'
+        replacement: 'unified-ai-api'
+
+  # Scrape config for local testing with Docker Compose
+  # This allows using the same Prometheus config for local dev.
+  # The target 'host.docker.internal' lets Prometheus (in a container)
+  # scrape the API service running on the host machine via the mapped port.
+  - job_name: 'unified-ai-api-local'
+    static_configs:
+      - targets: ['host.docker.internal:8000']
+        labels:
+          group: 'local-dev'
