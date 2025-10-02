@@ -3,8 +3,11 @@ import faiss
 import numpy as np
 import redis
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from prometheus_fastapi_instrumentator import Instrumentator
+
+# Import the new cache metrics module
+from . import cache_metrics
 
 # --- Configuration & Globals ---
 # In a real app, use a config file (e.g., Dynaconf, Pydantic Settings)
@@ -72,6 +75,34 @@ def health_check():
         "faiss_index_loaded": index is not None,
     }
 
+@app.get("/metrics/cache_accounting", summary="Get Cache Accounting Metrics", tags=["System"])
+def get_cache_accounting():
+    """
+    Provides a snapshot of cache metrics and checks for consistency.
+    """
+    snap = cache_metrics.get_snapshot()
+    # A simple consistency check
+    total_calculated = snap.get(cache_metrics.HITS, 0) + snap.get(cache_metrics.MISSES, 0)
+    total_recorded = snap.get(cache_metrics.TOTAL_REQUESTS, 0)
+
+    if total_calculated != total_recorded:
+        # Return 500 if inconsistent
+        return Response(
+            content=json.dumps({
+                "status": "inconsistent",
+                "snapshot": snap,
+                "details": f"Recorded total ({total_recorded}) does not match hits+misses ({total_calculated})."
+            }),
+            status_code=500,
+            media_type="application/json"
+        )
+
+    return {
+        "status": "ok",
+        "snapshot": snap
+    }
+
+
 @app.get('/search', summary="Perform Semantic Search", tags=["Search"])
 def search(q: str, k: int = 10):
     """
@@ -95,12 +126,15 @@ def search(q: str, k: int = 10):
             cached_result = cache.get(cache_key)
             if cached_result:
                 print(f"Cache hit for query: '{q}'")
+                # Use atomic counter for cache hit
+                cache_metrics.incr_hits()
                 return json.loads(cached_result)
         except redis.exceptions.RedisError as e:
             print(f"Redis error while getting cache: {e}")
 
-
     print(f"Cache miss for query: '{q}'")
+    # Use atomic counter for cache miss
+    cache_metrics.incr_misses()
 
     # 2. Compute embedding for the query
     query_embedding = model(q)

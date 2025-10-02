@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch.cuda.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import copy
+import os
 
 # --- Mock Components for Standalone Execution ---
 # In a real project, these would be in separate files.
@@ -149,6 +150,43 @@ class DualEncoderTrainer:
 
         return loss.item()
 
+# --- Checkpoint Save/Load Helpers ---
+def save_checkpoint(state, checkpoint_path):
+    """Saves the trainer state to a file."""
+    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+    torch.save(state, checkpoint_path)
+    print(f"Checkpoint saved to {checkpoint_path}")
+
+def load_checkpoint(checkpoint_path, trainer):
+    """Loads the trainer state from a file."""
+    if not os.path.exists(checkpoint_path):
+        print(f"Warning: Checkpoint path {checkpoint_path} does not exist.")
+        return None
+
+    # Load checkpoint to CPU first to avoid GPU memory issues
+    ckpt = torch.load(checkpoint_path, map_location='cpu')
+
+    # Load state dicts
+    trainer.q.load_state_dict(ckpt['q_state'])
+    trainer.k.load_state_dict(ckpt['k_state'])
+    trainer.opt.load_state_dict(ckpt['opt_state'])
+    trainer.scheduler.load_state_dict(ckpt['scheduler_state'])
+
+    # Handle scaler state, which might not exist in older checkpoints
+    if 'scaler_state' in ckpt:
+        trainer.scaler.load_state_dict(ckpt['scaler_state'])
+
+    # Restore momentum queue and pointer
+    if 'queue' in ckpt:
+        with torch.no_grad():
+            # Move queue to the correct device before copying
+            trainer.queue.copy_(ckpt['queue'].to(trainer.device))
+            trainer.queue_ptr[0] = ckpt.get('queue_ptr', trainer.queue_ptr[0])
+
+    print(f"Checkpoint loaded from {checkpoint_path}")
+    return ckpt.get('epoch', 0)
+
+
 # --- Example Usage ---
 if __name__ == '__main__':
     # Configuration
@@ -156,6 +194,8 @@ if __name__ == '__main__':
     IN_DIM = 256
     EMBEDDING_DIM = 128
     QUEUE_SIZE = 4096
+    CHECKPOINT_DIR = "checkpoints"
+    CHECKPOINT_FILE = os.path.join(CHECKPOINT_DIR, "trainer_checkpoint.pt")
 
     # 1. Create model and trainer
     encoder = MockEncoder(in_dim=IN_DIM, out_dim=EMBEDDING_DIM)
@@ -166,7 +206,6 @@ if __name__ == '__main__':
     )
 
     # 2. Create a dummy dataloader
-    # In a real scenario, this would load augmented pairs (e.g., two different crops of an image)
     dummy_dataset = [{'q': torch.randn(IN_DIM), 'k': torch.randn(IN_DIM)} for _ in range(BATCH_SIZE * 10)]
     dataloader = torch.utils.data.DataLoader(
         dummy_dataset,
@@ -174,17 +213,41 @@ if __name__ == '__main__':
         collate_fn=lambda x: {'q': torch.stack([i['q'] for i in x]), 'k': torch.stack([i['k'] for i in x])}
     )
 
-    # 3. Training loop
-    print("\nStarting mock training loop...")
-    for epoch in range(3):
+    # 3. Attempt to load from checkpoint
+    start_epoch = 0
+    if os.path.exists(CHECKPOINT_FILE):
+        print(f"Found existing checkpoint. Attempting to load...")
+        try:
+            loaded_epoch = load_checkpoint(CHECKPOINT_FILE, trainer)
+            if loaded_epoch is not None:
+                start_epoch = loaded_epoch + 1
+                print(f"Resuming training from epoch {start_epoch}")
+        except Exception as e:
+            print(f"Could not load checkpoint, starting from scratch. Error: {e}")
+
+
+    # 4. Training loop
+    print(f"\nStarting mock training loop from epoch {start_epoch}...")
+    for epoch in range(start_epoch, start_epoch + 3):
         total_loss = 0
         for i, batch in enumerate(dataloader):
             loss = trainer.train_step(batch)
             total_loss += loss
             if i % 5 == 0:
-                print(f"Epoch {epoch+1}, Step {i+1}, Loss: {loss:.4f}, LR: {trainer.scheduler.get_last_lr()[0]:.6f}")
-        print(f"--- Epoch {epoch+1} Average Loss: {total_loss / len(dataloader):.4f} ---\n")
+                print(f"Epoch {epoch}, Step {i+1}, Loss: {loss:.4f}, LR: {trainer.scheduler.get_last_lr()[0]:.6f}")
+        print(f"--- Epoch {epoch} Average Loss: {total_loss / len(dataloader):.4f} ---\n")
+
+        # 5. Save checkpoint at the end of each epoch
+        state = {
+            'q_state': trainer.q.state_dict(),
+            'k_state': trainer.k.state_dict(),
+            'opt_state': trainer.opt.state_dict(),
+            'scheduler_state': trainer.scheduler.state_dict(),
+            'scaler_state': trainer.scaler.state_dict(),
+            'queue': trainer.queue,
+            'queue_ptr': trainer.queue_ptr[0].item(),
+            'epoch': epoch
+        }
+        save_checkpoint(state, CHECKPOINT_FILE)
 
     print("Mock training complete.")
-    # You can now save the query encoder:
-    # torch.save(trainer.q.state_dict(), 'final_encoder.pth')
