@@ -1,0 +1,101 @@
+# --- Hyperparameter Optimization (HPO) Configuration ---
+# This file defines the search space for tuning the AI model and retrieval system.
+# It can be used with HPO frameworks like Optuna, Ray Tune, or custom scripts.
+
+# The optimization goal. Can be 'maximize' or 'minimize'.
+direction: maximize
+# The primary metric to optimize for.
+# Examples: 'recall@10', 'map@10', 'validation_accuracy'
+target_metric: "recall@10"
+
+
+# --- Search Space Definitions ---
+search_space:
+
+  # 1. Trainer Hyperparameters
+  trainer_params:
+    learning_rate:
+      type: log_uniform
+      low: 1.0e-6
+      high: 1.0e-4
+      # Defines a logarithmic search between 0.000001 and 0.0001
+
+    weight_decay:
+      type: log_uniform
+      low: 1.0e-4
+      high: 1.0e-1
+      # Regularization parameter
+
+    temperature:
+      type: uniform
+      low: 0.05
+      high: 0.2
+      # Tau (τ) parameter for InfoNCE loss
+
+    momentum:
+      type: choice
+      values: [0.99, 0.999, 0.9999]
+      # m parameter for the momentum encoder (MoCo)
+
+    # --- Weights for the composite loss function ---
+    # These parameters (lambda values) control the contribution of each loss component.
+    # A good strategy is to make them sum to 1 by using a dirichlet distribution
+    # or simply fixing one and tuning the others.
+    loss_weights:
+      lambda_info_nce:
+        type: fixed
+        value: 1.0 # Anchor value, other losses are relative to this.
+      lambda_arcface:
+        type: uniform
+        low: 0.1
+        high: 1.0
+      lambda_triplet:
+        type: uniform
+        low: 0.1
+        high: 1.0
+
+
+  # 2. FAISS Index Builder Hyperparameters
+  # These parameters are for tuning the HNSW index.
+  # They trade off between build time, index size, and search speed/accuracy.
+  index_params:
+    hnsw_m:
+      type: int_uniform
+      low: 16
+      high: 64
+      step: 8
+      # Number of bi-directional links created for every new element.
+
+    hnsw_ef_construction:
+      type: int_uniform
+      low: 100
+      high: 500
+      step: 50
+      # Size of the dynamic list for the nearest neighbors during construction.
+
+    hnsw_ef_search:
+      type: int_uniform
+      low: 64
+      high: 512
+      step: 32
+      # Size of the dynamic list for the nearest neighbors during search.
+
+
+# --- HPO Algorithm Configuration ---
+# Specifies the algorithm and its parameters for the HPO trial.
+algorithm:
+  # Can be 'TPE' (Tree-structured Parzen Estimator), 'RandomSearch', 'GridSearch', etc.
+  name: TPE
+  # Number of trials to run in parallel.
+  concurrency: 4
+  # Number of initial random trials before starting the main algorithm.
+  n_startup_trials: 10
+
+
+# --- Execution Settings ---
+# Total number of HPO trials to run.
+num_trials: 100
+# Timeout for a single trial in seconds.
+trial_timeout_s: 3600 # 1 hour
+# Path to store HPO results (e.g., SQLite or journal file for Optuna)
+storage_path: "hpo_results/study.db"

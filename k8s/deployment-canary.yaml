@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unified-ai-api-canary
+  labels:
+    app: unified-ai-api
+    track: canary
+spec:
+  replicas: 1 # Start with a small number of replicas for the canary
+  selector:
+    matchLabels:
+      app: unified-ai-api
+      track: canary
+  template:
+    metadata:
+      labels:
+        app: unified-ai-api
+        track: canary
+    spec:
+      containers:
+        - name: api
+          # Replace with your actual image repository and tag
+          image: your-repo/unified-ai-api:latest-canary
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: REDIS_HOST
+              value: "unified-ai-redis-service" # K8s service name for Redis
+            - name: REDIS_PORT
+              value: "6379"
+          # Readiness probe to ensure the service is ready to accept traffic
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Liveness probe to restart the container if it becomes unresponsive
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: faiss-index-storage
+              mountPath: /app/models
+      # In a real K8s setup, the index would be loaded from a persistent volume
+      # or an object store. This volume is a placeholder.
+      volumes:
+        - name: faiss-index-storage
+          persistentVolumeClaim:
+            claimName: faiss-index-pvc # This PVC would need to be created separately
+---
+# Example of a service to expose the deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: unified-ai-api-service
+spec:
+  selector:
+    app: unified-ai-api # This selector would target both stable and canary pods
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000
+  type: LoadBalancer

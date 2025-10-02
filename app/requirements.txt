@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+gunicorn
+redis
+prometheus-fastapi-instrumentator
+numpy
+faiss-cpu
+torch

@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  redis:
+    image: "redis:alpine"
+    container_name: unified_ai_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis_data:/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: unified_ai_api
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount the application directory for live-reloading
+      - ./app:/app/app
+      # Mount the models directory to make the index available
+      - ./models:/app/models
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # The app/main.py will look for the index at 'models/index.faiss'
+      # which is correctly mapped from the host.
+
+volumes:
+  redis_data:
+
+networks:
+  default:
+    name: unified_ai_network
